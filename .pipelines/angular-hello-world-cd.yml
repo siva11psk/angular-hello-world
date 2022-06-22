@@ -1,0 +1,77 @@
+pool:
+  vmImage: "ubuntu-latest"
+
+trigger:
+- none
+
+variables:
+  - name: branchName
+    value: "deployment-Build-$(resources.pipeline.angular-hello-world-ci.runName)-Release-$(Build.BuildNumber)"
+  - name: sourceManifestPath
+    value: "$(Pipeline.Workspace)/angular-hello-world-ci/manifests"
+  - name: destinationManifestPath
+    value: "./clusters/my-cluster/app-manifests"
+
+resources:
+  repositories:
+    - repository: gitOps
+      type: git
+      name: k8s-gitops
+  pipelines:
+    - pipeline: angular-hello-world-ci
+      source: angular-hello-world-ci
+      trigger:
+        branches:
+          include:
+            - main
+
+
+stages:
+  - stage: deploy
+    displayName: "Deployment"
+    jobs:
+      - deployment: "createPR"
+        displayName: "DevPullRequest"
+        environment: DEV
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: angular-hello-world-ci
+                - checkout: gitOps
+                  persistCredentials: true
+                - bash: |
+                    git config --global user.email "GitOpsAgent@endava.com" 
+                    git config --global user.name "GitOpsAgent"
+                    git checkout -b "$(branchName)"
+                    echo "created the branch $(branchName)"
+                  displayName: CheckoutNewBranch
+                - bash: |
+                    mkdir -p ./clusters/my-cluster/app-manifests
+                    cp -r $(sourceManifestPath)/* $(destinationManifestPath)/
+                    echo "manifests copied"
+                  displayName: CopyTheManifests
+                - bash: |
+                    git status
+                    git add --all
+                    git commit -m "deployment of release number - Release-$(Build.BuildNumber)"
+                    git push --set-upstream origin "$(branchName)"
+                    echo "pushed the branch $(branchName)"
+                  displayName: PushBranch
+                - bash: |
+                    echo $(System.AccessToken) | az devops login
+                    az devops configure --defaults organization=$(System.CollectionUri) project=$(System.TeamProject) \
+                      --use-git-aliases true
+                    pr_response=$(az repos pr create --project $(System.TeamProject) \
+                      --repository "k8s-gitops" --target-branch "main" --source-branch "$(branchName)" \
+                      --title "deployment $(Build.BuildNumber)" \
+                      --squash -o json)
+                    echo $pr_response
+                    export pr_num=$(echo $pr_response | jq '.pullRequestId')
+                    [ -z "$pr_num" ] && exit 1
+                    echo "created pull request - "$pr_num
+                  displayName: CreatePR
+            
+
+    
+

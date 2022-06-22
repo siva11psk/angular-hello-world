@@ -1,0 +1,36 @@
+trigger:
+  - main
+
+variables:
+  - name: TAG
+    value: $(Build.BuildNumber)
+
+pool:
+  vmImage: "ubuntu-latest"
+
+
+name: $(Date:yyyyMMdd)$(Rev:.r)
+
+stages:
+  - stage: CI
+    jobs:
+      - job: buildAndPublishImage
+        steps:
+          - bash: |
+              npm install
+              npm run build --prod
+              docker build -t $REPOSITORY:$TAG .
+              docker login -u "$REGISTRY_USER" -p "$REGISTRY_PASSWORD"
+              docker image push $REPOSITORY:$TAG
+            env:
+              REGISTRY_PASSWORD: $(REGISTRY_PASSWORD)
+      - job: publishManifestFiles
+        steps:
+          - bash: |
+              sed -i 's/#{IMAGETAG}#/$(TAG)/g' ./manifests/*.yaml
+            displayName: RenameImageTags
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: ./manifests
+              ArtifactName: manifests
+              
